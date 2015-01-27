@@ -23,6 +23,8 @@
 
 #define SAMSUNG_STOP_BIT false
 
+#define SAMSUNG_KEY_1 0xFB040707
+
 
 //por um vector a C com 40 posiçoes...
 
@@ -62,8 +64,8 @@ public:
     }_pulse;
 
     typedef struct{
-        std::vector<_pulse> pulses;
-        uint32_t total_time;
+        _pulse pulses[40];
+        uint8_t total_pulses;
     }_ir_pulses;
 
     enum Protocol{
@@ -76,7 +78,7 @@ public:
 
     struct IR_PACKAGE{
         Protocol protocol;
-        std::vector<_pulse> *pulses;
+        _pulse *pulses;
         uint32_t code;
     };
 
@@ -86,7 +88,7 @@ public:
         complete_read=false;
         first_read=true;  //inform the IRQ that the next signal is the start
 
-        ir_pulses.pulses.reserve(20); //reserve space for 20 pulses(on and off)
+        ir_pulses.total_pulses=0;
 
         //init a timer. This will be Timer3, hooping to use its ability to do the pwm input
         timer.setTimeBaseByFrequency(100000,20000);   //tick at 10000Hz |1 tick=10us with an auto-reload value of 2000= 20ms
@@ -111,7 +113,7 @@ public:
 
     }
 
-    void decode(void){
+    void decode(IR_PACKAGE *ir_pck){
         struct PROT_TIME{
             uint16_t One_high_max;
             uint16_t One_high_min;
@@ -125,14 +127,18 @@ public:
             uint8_t lenght;
         };
 
-        IR_PACKAGE ir_pck;
         PROT_TIME protocol_time;
         uint32_t code;
         bool decode_ok;
 
+         _pulse test;
+
+        test.on=ir_pulses.pulses[0].on;
+        test.off=ir_pulses.pulses[0].off;
+
         if(SAMSUNG_START_MIN<=ir_pulses.pulses[0].on && ir_pulses.pulses[0].on <= SAMSUNG_START_MAX){
                 shost<<"SAMSUNG\n";
-                ir_pck.protocol=SAMSUNG;
+                ir_pck->protocol=SAMSUNG;
                 protocol_time.lenght=SAMSUNG_N_BITS;
 
                 protocol_time.One_high_max=SAMSUNG_1_HIGH_MAX;
@@ -149,11 +155,10 @@ public:
         }
         decode_ok=false;
         code=0;
-        //_pulse test;
 
-        for (uint16_t i=1; i< ir_pulses.pulses.size(); i++){
-              //  test.on=ir_pulses.pulses[i].on;
-              //  test.off=ir_pulses.pulses[i].off;
+        for (uint8_t i=1; i< ir_pulses.total_pulses; i++){
+                test.on=ir_pulses.pulses[i].on;
+                test.off=ir_pulses.pulses[i].off;
                 if( (protocol_time.One_high_min<=ir_pulses.pulses[i].on && ir_pulses.pulses[i].on <= protocol_time.One_high_max) &&
                     (protocol_time.One_low_min<=ir_pulses.pulses[i].off && ir_pulses.pulses[i].off <= protocol_time.One_low_max) ){
                             code|=1<<(i-1);
@@ -169,9 +174,13 @@ public:
                     }
 
         }
-        shost<<"IR DECODE="<<decode_ok<<"\n";
+        shost<<"IR DECODE="<<decode_ok<<ir_pulses.total_pulses<<"\n";
         shost<<code;
-        ir_pck.code=code;
+        ir_pck->code=code;
+
+        //delete all the raw input IR
+         ir_pulses.total_pulses=0;
+
         return;
 
 
@@ -180,7 +189,7 @@ public:
 
     void Semihost_print_pck(void){
 
-        for(uint16_t i=0; i< ir_pulses.pulses.size(); i++){
+        for(uint8_t i=0; i< ir_pulses.total_pulses; i++){
                 shost<< "OFF: "<< ir_pulses.pulses[i].off<<" ON : "<<  ir_pulses.pulses[i].on<<"\n";
         }
 
@@ -201,6 +210,10 @@ public:
 
     void Exti_onInterrupt(uint8_t /* extiLine */) {
       static _pulse ThisPulse;
+      uint8_t n = ir_pulses.total_pulses;
+      if(n>=40)
+          return;
+
       //uint16_t counter;
 
       if(!pa[IR_IN].read()){            //off - Falling edge
@@ -208,7 +221,8 @@ public:
             timer.disablePeripheral();
             ThisPulse.off=timer.getCounter(); //the signal is inverted by the receptor
             timer.setCounter(0);
-            ir_pulses.pulses.push_back(ThisPulse);
+            ir_pulses.pulses[n] =ThisPulse;
+            ir_pulses.total_pulses++;
             ThisPulse.on=ThisPulse.off=0;
           }
             timer.enablePeripheral();
@@ -247,23 +261,27 @@ shost << "\fSTART\n";
   // set up SysTick at 1ms resolution
   MillisecondTimer::initialise();
 
-//  GpioA<DefaultDigitalOutputFeature<5> > LED;
+  GpioA<DefaultDigitalOutputFeature<5> > LED;
 //  GpioC<DefaultDigitalInputFeature<13> > B;
 
  Nvic::initialise();
 
  IR _ir;
+ IR::IR_PACKAGE IR_CODE;
  //The interrupts are enable, so it will capture any package
 
 while(1){
- //lets wait for the complete package
- while(!_ir.IsReadComplete()){
-    asm("nop");
- }
+     //lets wait for the complete package
+     while(!_ir.IsReadComplete()){
+        asm("nop");
+     }
 
-// _ir.Semihost_print_pck();
+    // _ir.Semihost_print_pck();
 
- _ir.decode();
+     _ir.decode(&IR_CODE);
+
+     if(IR_CODE.code==SAMSUNG_KEY_1)
+         LED[5].setState(!LED[5].read() );
 
 }
 

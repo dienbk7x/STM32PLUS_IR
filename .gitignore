@@ -32,3 +32,5 @@
 *.ebp
 *.elay
 *.depend
+obj/
+bin/
